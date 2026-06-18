@@ -6,12 +6,35 @@ const path = require('path');
 const axios = require('axios');
 const { XMLParser } = require('fast-xml-parser');
 const NodeCache = require('node-cache');
+const rateLimit = require('express-rate-limit');
 
 const app = express();
 const cache = new NodeCache({ stdTTL: 3600 });
 
 app.use(cors());
 app.use(express.json());
+
+// ---------------------------------------------------------------------------
+// Rate limiting
+// ---------------------------------------------------------------------------
+const apiLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 60,             // 60 requests per minute per IP
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests, please try again later.' },
+});
+
+// Stricter limit for the expensive EUR-Lex fetch endpoints
+const fetchLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many fetch requests, please try again later.' },
+});
+
+app.use('/api', apiLimiter);
 
 // ---------------------------------------------------------------------------
 // Static regulation metadata
@@ -332,7 +355,7 @@ app.get('/api/languages', (req, res) => {
   res.json(EU_LANGUAGES);
 });
 
-app.get('/api/regulation/:celex', async (req, res) => {
+app.get('/api/regulation/:celex', fetchLimiter, async (req, res) => {
   const { celex } = req.params;
   const lang = (req.query.lang || 'EN').toUpperCase();
 
@@ -383,7 +406,7 @@ app.get('/api/regulation/:celex', async (req, res) => {
 });
 
 // Check which languages are available for a document
-app.get('/api/regulation/:celex/available-languages', async (req, res) => {
+app.get('/api/regulation/:celex/available-languages', fetchLimiter, async (req, res) => {
   const { celex } = req.params;
 
   if (!/^[A-Z0-9]+$/.test(celex)) {
@@ -420,8 +443,14 @@ app.get('/api/regulation/:celex/available-languages', async (req, res) => {
 // Serve built frontend in production
 // ---------------------------------------------------------------------------
 const CLIENT_DIST = path.join(__dirname, 'client', 'dist');
+const staticLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 300,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 app.use(express.static(CLIENT_DIST));
-app.get('*', (req, res) => {
+app.get('*', staticLimiter, (req, res) => {
   res.sendFile(path.join(CLIENT_DIST, 'index.html'));
 });
 
